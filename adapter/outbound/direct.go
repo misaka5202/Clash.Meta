@@ -7,6 +7,7 @@ import (
 	"github.com/metacubex/mihomo/component/dialer"
 	"github.com/metacubex/mihomo/component/loopback"
 	"github.com/metacubex/mihomo/component/resolver"
+	"github.com/metacubex/mihomo/component/snifake"
 	C "github.com/metacubex/mihomo/constant"
 )
 
@@ -31,6 +32,15 @@ func (d *Direct) DialContext(ctx context.Context, metadata *C.Metadata) (C.Conn,
 	if err != nil {
 		return nil, err
 	}
+	// Sheas-Cealer style SNI mimic for DIRECT: when the target domain matches a
+	// sni-mimic rule, either rewrite the outer ClientHello SNI (default) or run
+	// the certificate-MITM path (sni-mitm: true). The TCP conn still goes to the
+	// real resolved IP either way.
+	host := metadata.Host
+	if host == "" {
+		host = metadata.SniffHost
+	}
+	c = snifake.ApplyDirect(c, host)
 	return d.loopBack.NewConn(NewConn(c, d)), nil
 }
 

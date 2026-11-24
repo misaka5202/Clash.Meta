@@ -20,6 +20,7 @@ import (
 	"github.com/metacubex/mihomo/common/yaml"
 	"github.com/metacubex/mihomo/component/age"
 	"github.com/metacubex/mihomo/component/auth"
+	"github.com/metacubex/mihomo/component/snifake"
 	"github.com/metacubex/mihomo/component/cidr"
 	"github.com/metacubex/mihomo/component/fakeip"
 	"github.com/metacubex/mihomo/component/geodata"
@@ -457,6 +458,8 @@ type RawConfig struct {
 	SubRules      map[string][]string       `yaml:"sub-rules" json:"sub-rules"`
 	Listeners     []map[string]any          `yaml:"listeners" json:"listeners"`
 	Hosts         map[string]any            `yaml:"hosts" json:"hosts"`
+	SniMimic      map[string]string         `yaml:"sni-mimic" json:"sni-mimic"`
+	SniMitm       bool                      `yaml:"sni-mitm" json:"sni-mitm"`
 	DNS           RawDNS                    `yaml:"dns" json:"dns"`
 	NTP           RawNTP                    `yaml:"ntp" json:"ntp"`
 	Tun           RawTun                    `yaml:"tun" json:"tun"`
@@ -713,6 +716,12 @@ func ParseRawConfig(rawCfg *RawConfig) (*Config, error) {
 		return nil, err
 	}
 	config.Hosts = hosts
+
+	// configure Sheas-Cealer style SNI mimic rules (applied by DIRECT)
+	if len(rawCfg.SniMimic) > 0 {
+		snifake.SetRules(rawCfg.SniMimic)
+		snifake.SetMITM(rawCfg.SniMitm)
+	}
 
 	parseIPV6(rawCfg) // must before DNS and Tun
 
