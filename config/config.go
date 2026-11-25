@@ -711,7 +711,7 @@ func ParseRawConfig(rawCfg *RawConfig) (*Config, error) {
 	// rule can pin the destination IP as well as fake the SNI.
 	snifake.ResetRules()
 	for _, path := range rawCfg.CealingFiles {
-		loaded, err := snifake.LoadRulesFile(path)
+		loaded, err := snifake.LoadRulesFile(C.Path.Resolve(path))
 		if err != nil {
 			log.Warnln("snifake: load %s failed: %v", path, err)
 			continue
