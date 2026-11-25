@@ -297,16 +297,18 @@ func ResetRules() {
 	rulesMu.Unlock()
 }
 
-func lookupRule(host string) *rule {
+// lookupRule returns a copy of the first matching rule; handing back a pointer
+// into the shared slice would race with a concurrent reload.
+func lookupRule(host string) (rule, bool) {
 	host = strings.ToLower(host)
 	rulesMu.RLock()
 	defer rulesMu.RUnlock()
 	for i := range rules {
 		if rules[i].matches(host) {
-			return &rules[i]
+			return rules[i], true
 		}
 	}
-	return nil
+	return rule{}, false
 }
 
 // ruleCount is used by tests and diagnostics.

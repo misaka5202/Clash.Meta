@@ -45,8 +45,8 @@ type Plan struct {
 
 // PlanFor returns the plan for host and whether a rule matched.
 func PlanFor(host string) (Plan, bool) {
-	r := lookupRule(host)
-	if r == nil {
+	r, ok := lookupRule(host)
+	if !ok {
 		return Plan{}, false
 	}
 	plan := Plan{Mode: r.mode, SNI: r.alias, DialTo: r.dst.address()}
@@ -63,8 +63,8 @@ func LookupIP(host string) (string, bool) {
 	if host == "" {
 		return "", false
 	}
-	r := lookupRule(host)
-	if r == nil {
+	r, ok := lookupRule(host)
+	if !ok {
 		return "", false
 	}
 	addr := r.dst.address()
