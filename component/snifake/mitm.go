@@ -174,18 +174,3 @@ func (m *mitmConn) RemoteAddr() net.Addr               { return m.realConn.Remot
 func (m *mitmConn) SetDeadline(t time.Time) error      { return m.realConn.SetDeadline(t) }
 func (m *mitmConn) SetReadDeadline(t time.Time) error  { return m.realConn.SetReadDeadline(t) }
 func (m *mitmConn) SetWriteDeadline(t time.Time) error { return m.realConn.SetWriteDeadline(t) }
-
-// MITMWrapIf wraps real with the certificate-MITM path when the domain has a
-// mimic rule; otherwise it returns real unchanged.
-func MITMWrapIf(real net.Conn, host string) net.Conn {
-	if !Enabled() || host == "" {
-		return real
-	}
-	alias := Lookup(host)
-	if alias == "" {
-		return real
-	}
-	return newMITMConn(real, host, alias)
-}
-
-var _ = io.Discard

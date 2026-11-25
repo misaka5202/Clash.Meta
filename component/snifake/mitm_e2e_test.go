@@ -36,7 +36,11 @@ func originSelfSigned(host string) tls.Certificate {
 // data. Success proves the app validates without ignore-certificate-errors
 // while the wire SNI to the origin is the benign alias.
 func TestMITMEndToEnd(t *testing.T) {
-	SetRules(map[string]string{"origin.test": "benign.example"})
+	ResetRules()
+	defer ResetRules()
+	if err := AddCealingRule([]any{[]any{"origin.test"}, "benign.example", "127.0.0.1"}); err != nil {
+		t.Fatal(err)
+	}
 	SetMITM(true)
 	defer SetMITM(false)
 
@@ -70,7 +74,7 @@ func TestMITMEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	m := MITMWrapIf(real, "origin.test")
+	m := ApplyDirect(real, "origin.test")
 
 	s, err := EnsureSigner()
 	if err != nil {

@@ -447,6 +447,8 @@ type RawConfig struct {
 	Listeners     []map[string]any          `yaml:"listeners" json:"listeners"`
 	Hosts         map[string]any            `yaml:"hosts" json:"hosts"`
 	SniMimic      map[string]string         `yaml:"sni-mimic" json:"sni-mimic"`
+	CealingRules  []any                     `yaml:"cealing-rules" json:"cealing-rules"`
+	CealingFiles  []string                  `yaml:"cealing-files" json:"cealing-files"`
 	SniMitm       bool                      `yaml:"sni-mitm" json:"sni-mitm"`
 	DNS           RawDNS                    `yaml:"dns" json:"dns"`
 	NTP           RawNTP                    `yaml:"ntp" json:"ntp"`
@@ -704,9 +706,31 @@ func ParseRawConfig(rawCfg *RawConfig) (*Config, error) {
 	}
 	config.Hosts = hosts
 
-	// configure Sheas-Cealer style SNI mimic rules (applied by DIRECT)
+	// configure Sheas-Cealer / Cealing-Host style SNI mimic rules (DIRECT only).
+	// cealing-rules entries are raw Cealing triples: [domains, sni, ip], so a
+	// rule can pin the destination IP as well as fake the SNI.
+	snifake.ResetRules()
+	for _, path := range rawCfg.CealingFiles {
+		loaded, err := snifake.LoadRulesFile(path)
+		if err != nil {
+			log.Warnln("snifake: load %s failed: %v", path, err)
+			continue
+		}
+		for _, item := range loaded {
+			if err := snifake.AddCealingRule(item); err != nil {
+				log.Warnln("snifake: bad rule in %s: %v", path, err)
+			}
+		}
+	}
+	for _, item := range rawCfg.CealingRules {
+		if err := snifake.AddCealingRule(item); err != nil {
+			log.Warnln("snifake: bad cealing rule: %v", err)
+		}
+	}
 	if len(rawCfg.SniMimic) > 0 {
 		snifake.SetRules(rawCfg.SniMimic)
+	}
+	if snifake.Enabled() {
 		snifake.SetMITM(rawCfg.SniMitm)
 		// export the root CA now so the GUI can install it on demand
 		if err := snifake.Prepare(); err != nil {

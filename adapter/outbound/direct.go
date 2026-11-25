@@ -3,6 +3,8 @@ package outbound
 import (
 	"context"
 	"fmt"
+	"net"
+	"net/netip"
 
 	"github.com/metacubex/mihomo/component/dialer"
 	"github.com/metacubex/mihomo/component/loopback"
@@ -26,20 +28,33 @@ func (d *Direct) DialContext(ctx context.Context, metadata *C.Metadata) (C.Conn,
 	if err := d.loopBack.CheckConn(metadata); err != nil {
 		return nil, err
 	}
-	opts := d.DialOptions()
-	opts = append(opts, dialer.WithResolver(resolver.DirectHostResolver))
-	c, err := dialer.DialContext(ctx, "tcp", metadata.RemoteAddress(), opts...)
-	if err != nil {
-		return nil, err
-	}
-	// Sheas-Cealer style SNI mimic for DIRECT: when the target domain matches a
-	// sni-mimic rule, either rewrite the outer ClientHello SNI (default) or run
-	// the certificate-MITM path (sni-mitm: true). The TCP conn still goes to the
-	// real resolved IP either way.
+	// Sheas-Cealer / Cealing-Host style rules for DIRECT: a matching rule can
+	// pin the TCP destination IP in addition to faking the SNI, so resolve the
+	// host first and let the rule override the dial target.
 	host := metadata.Host
 	if host == "" {
 		host = metadata.SniffHost
 	}
+
+	target := metadata.RemoteAddress()
+	if pinned, ok := snifake.LookupIP(host); ok {
+		if _, port, err := net.SplitHostPort(target); err == nil {
+			if ip, err := netip.ParseAddr(pinned); err == nil {
+				target = net.JoinHostPort(ip.String(), port)
+			} else {
+				target = net.JoinHostPort(pinned, port)
+			}
+		}
+	}
+
+	opts := d.DialOptions()
+	opts = append(opts, dialer.WithResolver(resolver.DirectHostResolver))
+	c, err := dialer.DialContext(ctx, "tcp", target, opts...)
+	if err != nil {
+		return nil, err
+	}
+	// The TCP conn already points at the rule IP; ApplyDirect only decides
+	// between plaintext ClientHello rewriting and the certificate-MITM path.
 	c = snifake.ApplyDirect(c, host)
 	return d.loopBack.NewConn(NewConn(c, d)), nil
 }
