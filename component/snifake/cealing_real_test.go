@@ -375,3 +375,48 @@ func TestPassthroughRewriteBreaksHandshake(t *testing.T) {
 		t.Fatal("origin never saw a ClientHello")
 	}
 }
+
+// TestPlainTrafficPassesThrough guards the non-TLS branch: a rule says nothing
+// about the protocol, so a cleartext connection to a matched host must still
+// reach the origin byte for byte.
+func TestPlainTrafficPassesThrough(t *testing.T) {
+	ResetRules()
+	defer ResetRules()
+	if err := AddCealingRule([]any{[]any{"*plain.test"}, "g.cn", "127.0.0.1"}); err != nil {
+		t.Fatal(err)
+	}
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_, _ = io.Copy(conn, conn) // echo
+	}()
+
+	real, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	bridged := ApplyDirect(real, "a.plain.test")
+
+	const request = "GET / HTTP/1.1\r\nHost: a.plain.test\r\n\r\n"
+	if _, err := io.WriteString(bridged, request); err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, len(request))
+	_ = bridged.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if _, err := io.ReadFull(bridged, buf); err != nil {
+		t.Fatalf("cleartext did not survive the bridge: %v", err)
+	}
+	if string(buf) != request {
+		t.Fatalf("echo mismatch: %q", buf)
+	}
+	bridged.Close()
+}

@@ -7,6 +7,7 @@
 package snifake
 
 import (
+	"bufio"
 	"io"
 	"net"
 	"sync"
@@ -35,15 +36,20 @@ func EnsureSigner() (*Signer, error) {
 // app. Both are backed by io.Pipes so the outer shuttle (mitmConn) can move
 // raw bytes between the tunnel and appTLS without a real socket on the app side.
 type appSideConn struct {
-	r *io.PipeReader // app -> appTLS (ciphertext)
-	w *io.PipeWriter // appTLS -> app (ciphertext)
+	r io.Reader // app -> appTLS (ciphertext)
+	w io.Writer // appTLS -> app (ciphertext)
 }
 
 func (c *appSideConn) Read(b []byte) (int, error)  { return c.r.Read(b) }
 func (c *appSideConn) Write(b []byte) (int, error) { return c.w.Write(b) }
 func (c *appSideConn) Close() error {
-	c.r.CloseWithError(net.ErrClosed)
-	c.w.CloseWithError(net.ErrClosed)
+	// the pipe ends carry the close signal; a plain reader has none
+	if cr, ok := c.r.(interface{ CloseWithError(error) error }); ok {
+		_ = cr.CloseWithError(net.ErrClosed)
+	}
+	if cw, ok := c.w.(interface{ CloseWithError(error) error }); ok {
+		_ = cw.CloseWithError(net.ErrClosed)
+	}
 	return nil
 }
 func (c *appSideConn) LocalAddr() net.Addr              { return &net.TCPAddr{} }
@@ -92,6 +98,15 @@ func (m *mitmConn) bridge(rIn *io.PipeReader, wOut *io.PipeWriter) {
 }
 
 func (m *mitmConn) run(rIn *io.PipeReader, wOut *io.PipeWriter) {
+	// A rule says nothing about the protocol the application speaks. If this
+	// connection is not a TLS handshake, terminating it would corrupt the
+	// traffic, so shuttle the bytes through unchanged instead.
+	peek := bufio.NewReader(rIn)
+	if head, err := peek.Peek(1); err != nil || len(head) == 0 || head[0] != 0x16 {
+		m.passthrough(peek, wOut)
+		return
+	}
+
 	s, err := EnsureSigner()
 	if err != nil {
 		m.fail(err)
@@ -122,7 +137,7 @@ func (m *mitmConn) run(rIn *io.PipeReader, wOut *io.PipeWriter) {
 		InsecureSkipVerify: true,
 	}
 
-	appTLS := xutls.Server(&appSideConn{r: rIn, w: wOut}, serverCfg)
+	appTLS := xutls.Server(&appSideConn{r: peek, w: wOut}, serverCfg)
 	upTLS := xutls.UClient(m.realConn, clientCfg, xutls.HelloChrome_Auto)
 
 	// The origin handshake uses the already-connected TCP and is independent of
@@ -144,6 +159,16 @@ func (m *mitmConn) run(rIn *io.PipeReader, wOut *io.PipeWriter) {
 	}()
 	_, _ = io.Copy(appTLS, upTLS) // origin cleartext -> app
 	appTLS.Close()
+}
+
+// passthrough relays the connection in both directions without touching it.
+func (m *mitmConn) passthrough(app *bufio.Reader, toApp *io.PipeWriter) {
+	go func() {
+		_, _ = io.Copy(toApp, m.realConn)
+		toApp.CloseWithError(net.ErrClosed)
+	}()
+	_, _ = io.Copy(m.realConn, app)
+	m.realConn.Close()
 }
 
 func (m *mitmConn) fail(err error) {
