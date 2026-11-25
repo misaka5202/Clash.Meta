@@ -53,8 +53,9 @@ func (d *Direct) DialContext(ctx context.Context, metadata *C.Metadata) (C.Conn,
 	if err != nil {
 		return nil, err
 	}
-	// The TCP conn already points at the rule IP; ApplyDirect only decides
-	// between plaintext ClientHello rewriting and the certificate-MITM path.
+	// The TCP conn already points at the rule IP; ApplyDirect decides whether
+	// this host has a rule at all and, if so, serves it through the
+	// certificate bridge so the wire SNI becomes the fake one.
 	c = snifake.ApplyDirect(c, host)
 	return d.loopBack.NewConn(NewConn(c, d)), nil
 }
