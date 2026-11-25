@@ -13,10 +13,44 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"math/big"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
+
+	C "github.com/metacubex/mihomo/constant"
 )
+
+const (
+	// DirName is the directory (under the mihomo home dir) that stores the
+	// persisted root CA. Clients install <DirName>/root.crt into their trust
+	// store once; the file is shared over the filesystem with the GUI.
+	DirName = "sni-mitm"
+
+	rootCertFile = "root.crt"
+	rootKeyFile  = "root.key"
+)
+
+// Dir returns the directory holding the persisted root CA, or "" when the
+// mihomo home directory is not known yet.
+func Dir() string {
+	home := C.Path.HomeDir()
+	if home == "" {
+		return ""
+	}
+	return filepath.Join(home, DirName)
+}
+
+// CertPath returns the path of the exported root certificate (PEM), or "" when
+// the home directory is unknown. GUIs read this file to install the CA.
+func CertPath() string {
+	if d := Dir(); d != "" {
+		return filepath.Join(d, rootCertFile)
+	}
+	return ""
+}
 
 // Cert is one issued leaf: chain (leaf first, then root) plus the leaf's
 // private key, ready to be wrapped into a utls/tls server certificate.
@@ -71,6 +105,88 @@ func NewSelfSignedRoot() (*Signer, error) {
 		return nil, err
 	}
 	return &Signer{root: root, rootK: key, cache: map[string]*Cert{}}, nil
+}
+
+// LoadOrCreate loads the persisted root CA from dir, generating and saving a
+// fresh one when it is missing. When dir is empty the CA is kept memory-only.
+// Persisting the root means the user installs the trust anchor once, and it
+// keeps working across restarts.
+func LoadOrCreate(dir string) (*Signer, error) {
+	if dir != "" {
+		s, err := loadSigner(dir)
+		if err == nil {
+			return s, nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			// corrupt or unreadable: fall through and regenerate
+			_ = os.Remove(filepath.Join(dir, rootCertFile))
+			_ = os.Remove(filepath.Join(dir, rootKeyFile))
+		}
+	}
+	s, err := NewSelfSignedRoot()
+	if err != nil {
+		return nil, err
+	}
+	if dir != "" {
+		if err := s.save(dir); err != nil {
+			return s, err
+		}
+	}
+	return s, nil
+}
+
+func loadSigner(dir string) (*Signer, error) {
+	certPEM, err := os.ReadFile(filepath.Join(dir, rootCertFile))
+	if err != nil {
+		return nil, err
+	}
+	keyPEM, err := os.ReadFile(filepath.Join(dir, rootKeyFile))
+	if err != nil {
+		return nil, err
+	}
+	certBlock, _ := pem.Decode(certPEM)
+	keyBlock, _ := pem.Decode(keyPEM)
+	if certBlock == nil || keyBlock == nil {
+		return nil, errors.New("sni-mitm: malformed persisted root CA")
+	}
+	root, err := x509.ParseCertificate(certBlock.Bytes)
+	if err != nil {
+		return nil, err
+	}
+	keyAny, err := x509.ParsePKCS8PrivateKey(keyBlock.Bytes)
+	if err != nil {
+		return nil, err
+	}
+	key, ok := keyAny.(*ecdsa.PrivateKey)
+	if !ok {
+		return nil, errors.New("sni-mitm: persisted root key is not ECDSA")
+	}
+	return &Signer{root: root, rootK: key, cache: map[string]*Cert{}}, nil
+}
+
+// save writes the root certificate and its private key to dir.
+func (s *Signer) save(dir string) error {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: s.root.Raw})
+	keyDER, err := x509.MarshalPKCS8PrivateKey(s.rootK)
+	if err != nil {
+		return err
+	}
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
+	if err := os.WriteFile(filepath.Join(dir, rootCertFile), certPEM, 0o644); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, rootKeyFile), keyPEM, 0o600)
+}
+
+// Prepare ensures the root CA exists and that its certificate has been
+// exported to the home directory, so a GUI can install it into the trust store
+// even before the first MITM connection happens. It is idempotent.
+func Prepare() error {
+	_, err := EnsureSigner()
+	return err
 }
 
 // RootPEM returns the root certificate in PEM form, for installing into the

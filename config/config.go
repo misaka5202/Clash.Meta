@@ -20,12 +20,12 @@ import (
 	"github.com/metacubex/mihomo/common/yaml"
 	"github.com/metacubex/mihomo/component/age"
 	"github.com/metacubex/mihomo/component/auth"
-	"github.com/metacubex/mihomo/component/snifake"
 	"github.com/metacubex/mihomo/component/cidr"
 	"github.com/metacubex/mihomo/component/fakeip"
 	"github.com/metacubex/mihomo/component/geodata"
 	"github.com/metacubex/mihomo/component/process"
 	"github.com/metacubex/mihomo/component/resolver"
+	"github.com/metacubex/mihomo/component/snifake"
 	"github.com/metacubex/mihomo/component/sniffer"
 	"github.com/metacubex/mihomo/component/trie"
 	C "github.com/metacubex/mihomo/constant"
@@ -708,6 +708,10 @@ func ParseRawConfig(rawCfg *RawConfig) (*Config, error) {
 	if len(rawCfg.SniMimic) > 0 {
 		snifake.SetRules(rawCfg.SniMimic)
 		snifake.SetMITM(rawCfg.SniMitm)
+		// export the root CA now so the GUI can install it on demand
+		if err := snifake.Prepare(); err != nil {
+			log.Warnln("snifake: prepare root CA failed: %v", err)
+		}
 	}
 
 	parseIPV6(rawCfg) // must before DNS and Tun

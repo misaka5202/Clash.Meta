@@ -5,12 +5,13 @@
 // destination resolved from the real domain.
 //
 // This is the network-layer equivalent of Sheas-Cealer's Chromium flags
-//   --host-rules="MAP <domain> <alias>"   (SNI -> alias)
-//   --host-resolver-rules="MAP <alias> <realIP>"  (DIRECT already dials real IP)
-//   --ignore-certificate-errors           (the server returns a cert that does
-//                                          not match the real domain, so the
-//                                          client app must still ignore the
-//                                          certificate error for the target)
+//
+//	--host-rules="MAP <domain> <alias>"   (SNI -> alias)
+//	--host-resolver-rules="MAP <alias> <realIP>"  (DIRECT already dials real IP)
+//	--ignore-certificate-errors           (the server returns a cert that does
+//	                                       not match the real domain, so the
+//	                                       client app must still ignore the
+//	                                       certificate error for the target)
 //
 // The rewrite keeps the SNI host_name the SAME LENGTH as the original by
 // padding the benign alias with trailing dots, so the ClientHello byte length
@@ -175,7 +176,7 @@ func RewriteClientHello(p []byte, alias string) bool {
 				break
 			}
 			// first entry: nameType(1) hostLen(2) hostName
-			orig := d[4:] // nameType and hostLen occupy d[2], d[3:5]
+			orig := d[4:]                       // nameType and hostLen occupy d[2], d[3:5]
 			hostLen := int(d[3])<<8 | int(d[4]) // wait: d[2]=type, d[3:5]=len
 			_ = orig
 			if 5+hostLen > el {

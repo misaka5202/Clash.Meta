@@ -16,8 +16,8 @@ func buildClientHello(sni string) []byte {
 	// sni extension: listLen(2) + [nameType(1) hostLen(2) host]
 	extBody := make([]byte, 0)
 	extBody = append(extBody, byte((1+2+hostLen)>>8), byte(1+2+hostLen)) // server_name_list length
-	extBody = append(extBody, 0x00)                                       // host_name
-	extBody = append(extBody, byte(hostLen>>8), byte(hostLen))            // hostname length
+	extBody = append(extBody, 0x00)                                      // host_name
+	extBody = append(extBody, byte(hostLen>>8), byte(hostLen))           // hostname length
 	extBody = append(extBody, sni...)
 
 	// extension framing: type(2)+len(2)+data
@@ -26,7 +26,7 @@ func buildClientHello(sni string) []byte {
 	extLen := len(ext)
 
 	v := make([]byte, 0, 2+32+1+sidLen+2+csLen+1+compLen+2+extLen)
-	v = append(v, 0x03, 0x03)        // legacy_version
+	v = append(v, 0x03, 0x03)          // legacy_version
 	v = append(v, make([]byte, 32)...) // random
 	v = append(v, byte(sidLen))
 	v = append(v, byte(csLen>>8), byte(csLen))

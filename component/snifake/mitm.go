@@ -21,10 +21,11 @@ var (
 	signerErr  error
 )
 
-// EnsureSigner lazily builds the in-memory root CA (once per process).
+// EnsureSigner lazily loads (or creates and persists) the root CA once per
+// process, so the exported root certificate stays stable across restarts.
 func EnsureSigner() (*Signer, error) {
 	signerOnce.Do(func() {
-		signer, signerErr = NewSelfSignedRoot()
+		signer, signerErr = LoadOrCreate(Dir())
 	})
 	return signer, signerErr
 }

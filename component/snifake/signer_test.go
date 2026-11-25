@@ -3,6 +3,8 @@ package snifake
 import (
 	"crypto/x509"
 	"encoding/pem"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -55,5 +57,26 @@ func TestSignerLeafVerify(t *testing.T) {
 	rc, err := x509.ParseCertificate(block.Bytes)
 	if err != nil || !rc.IsCA {
 		t.Fatalf("root not CA / parse: %v", err)
+	}
+}
+
+func TestLoadOrCreatePersists(t *testing.T) {
+	dir := t.TempDir()
+	s1, err := LoadOrCreate(dir)
+	if err != nil {
+		t.Fatalf("first LoadOrCreate: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, rootCertFile)); err != nil {
+		t.Fatalf("root cert not written: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, rootKeyFile)); err != nil {
+		t.Fatalf("root key not written: %v", err)
+	}
+	s2, err := LoadOrCreate(dir)
+	if err != nil {
+		t.Fatalf("second LoadOrCreate: %v", err)
+	}
+	if s1.RootPEM() != s2.RootPEM() {
+		t.Fatal("root CA changed across reload; persistence broken")
 	}
 }
