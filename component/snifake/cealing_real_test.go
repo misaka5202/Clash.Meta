@@ -100,3 +100,49 @@ func TestRealCealingHostBehaviour(t *testing.T) {
 		}
 	}
 }
+
+// TestRealCealingHostStats reports what the upstream file contributes once
+// loaded natively, which the old sni-mimic-only path could not express.
+func TestRealCealingHostStats(t *testing.T) {
+	path := filepath.Join("testdata", "Cealing-Host.json")
+	raw, err := LoadRulesFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ResetRules()
+	defer ResetRules()
+	for _, r := range raw {
+		if err := AddCealingRule(r); err != nil {
+			t.Fatalf("usable upstream rule rejected: %v (%v)", err, r)
+		}
+	}
+
+	alias, random, remove, pinned, local := 0, 0, 0, 0, 0
+	for _, r := range getRules() {
+		switch r.mode {
+		case ModeAlias:
+			alias++
+		case ModeRandom:
+			random++
+		case ModeRemove:
+			remove++
+		}
+		switch {
+		case r.dst.ip.IsValid() && !r.dst.ip.IsLoopback():
+			pinned++
+		case r.dst.ip.IsLoopback():
+			local++
+		case r.dst.host != "":
+			pinned++
+		case r.dst.empty:
+			// an empty ip is 127.0.0.1 upstream: the traffic is meant for a
+			// local terminator, which this fork does not ship
+			local++
+		}
+	}
+	t.Logf("documents=%d patterns=%d alias=%d random=%d remove=%d pinned_ip=%d loopback=%d",
+		len(raw), ruleCount(), alias, random, remove, pinned, local)
+	if alias+random+remove != ruleCount() {
+		t.Fatal("mode accounting mismatch")
+	}
+}
