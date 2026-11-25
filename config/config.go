@@ -731,8 +731,9 @@ func ParseRawConfig(rawCfg *RawConfig) (*Config, error) {
 		snifake.SetRules(rawCfg.SniMimic)
 	}
 	if snifake.Enabled() {
-		snifake.SetMITM(rawCfg.SniMitm)
-		// export the root CA now so the GUI can install it on demand
+		// every matched host is served through the certificate bridge, so the
+		// root CA must exist before the first connection; sni-mitm is accepted
+		// for compatibility and no longer selects an alternative path
 		if err := snifake.Prepare(); err != nil {
 			log.Warnln("snifake: prepare root CA failed: %v", err)
 		}

@@ -1,9 +1,15 @@
 package snifake
 
 import (
+	"bufio"
+	"crypto/tls"
+	"crypto/x509"
+	"io"
+	"net"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestRealCealingHost exercises the shipped upstream rule file end to end so a
@@ -144,5 +150,228 @@ func TestRealCealingHostStats(t *testing.T) {
 		len(raw), ruleCount(), alias, random, remove, pinned, local)
 	if alias+random+remove != ruleCount() {
 		t.Fatal("mode accounting mismatch")
+	}
+}
+
+// TestBridgeWireSNI proves the capability end to end on a real handshake: a
+// stock crypto/tls client advertises the real domain, the bridge terminates it
+// with a leaf signed by our root, and the origin must observe only the fake SNI
+// for every Cealing mode.
+func TestBridgeWireSNI(t *testing.T) {
+	cases := []struct {
+		name string
+		rule []any
+		host string
+		want func(got string) bool
+	}{
+		{
+			name: "alias longer than the real host",
+			rule: []any{[]any{"*youtube.com"}, "benign-served-by-cdn.example", "127.0.0.1"},
+			host: "www.youtube.com",
+			want: func(g string) bool { return g == "benign-served-by-cdn.example" },
+		},
+		{
+			name: "generated random host",
+			rule: []any{[]any{"*pximg.net"}, "", "127.0.0.1"},
+			host: "i.pximg.net",
+			want: func(g string) bool { return g != "i.pximg.net" && strings.HasSuffix(g, ".com") },
+		},
+		{
+			name: "server_name removed",
+			rule: []any{[]any{"*.nicovideo.jp"}, nil, "127.0.0.1"},
+			host: "www.nicovideo.jp",
+			want: func(g string) bool { return g == "" },
+		},
+	}
+
+	s, err := EnsureSigner()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM([]byte(s.RootPEM())) {
+		t.Fatal("cannot add root to pool")
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			ResetRules()
+			defer ResetRules()
+			if err := AddCealingRule(c.rule); err != nil {
+				t.Fatal(err)
+			}
+
+			const payload = "origin-payload\n"
+			seen := make(chan string, 1)
+			ln, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer ln.Close()
+
+			cert := originSelfSigned(c.host)
+			go func() {
+				conn, err := ln.Accept()
+				if err != nil {
+					return
+				}
+				var got string
+				server := tls.Server(conn, &tls.Config{
+					GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+						got = hello.ServerName
+						return &cert, nil
+					},
+				})
+				_, _ = io.WriteString(server, payload)
+				seen <- got
+				_ = server.Close()
+			}()
+
+			real, err := net.Dial("tcp", ln.Addr().String())
+			if err != nil {
+				t.Fatal(err)
+			}
+			bridged := ApplyDirect(real, c.host)
+
+			// the app is a STOCK validating client: the bridge must present a
+			// leaf for the real domain that chains to our root
+			app := tls.Client(bridged, &tls.Config{ServerName: c.host, RootCAs: pool})
+			if err := app.Handshake(); err != nil {
+				t.Fatalf("app handshake rejected the bridge: %v", err)
+			}
+			line, err := bufio.NewReader(app).ReadString('\n')
+			if err != nil {
+				t.Fatalf("read through the bridge: %v", err)
+			}
+			if line != payload {
+				t.Fatalf("payload = %q want %q", line, payload)
+			}
+			app.Close()
+
+			select {
+			case got := <-seen:
+				if !c.want(got) {
+					t.Fatalf("origin observed SNI %q for real host %q", got, c.host)
+				}
+				t.Logf("origin observed %q instead of %q", got, c.host)
+			case <-time.After(5 * time.Second):
+				t.Fatal("origin never saw a ClientHello")
+			}
+		})
+	}
+}
+
+// patchConn rewrites the SNI inside the first ClientHello it passes, keeping
+// the record byte-length intact, i.e. the plaintext approach the bridge
+// replaced.
+type patchConn struct {
+	net.Conn
+	alias string
+	done  bool
+}
+
+func (c *patchConn) Write(p []byte) (int, error) {
+	if !c.done && len(p) > 5 && p[0] == 0x16 {
+		c.done = true
+		patchSNI(p, c.alias)
+	}
+	return c.Conn.Write(p)
+}
+
+// patchSNI overwrites the first host_name in place, padding with dots.
+func patchSNI(p []byte, alias string) {
+	off := 5 + 4 // record header + handshake header
+	off += 2 + 32
+	if off >= len(p) {
+		return
+	}
+	off += 1 + int(p[off])
+	if off+2 > len(p) {
+		return
+	}
+	off += 2 + (int(p[off])<<8 | int(p[off+1]))
+	if off >= len(p) {
+		return
+	}
+	off += 1 + int(p[off])
+	if off+2 > len(p) {
+		return
+	}
+	ext := p[off+2:]
+	for e := 0; e+4 <= len(ext); {
+		et := int(ext[e])<<8 | int(ext[e+1])
+		el := int(ext[e+2])<<8 | int(ext[e+3])
+		if e+4+el > len(ext) {
+			return
+		}
+		if et == 0 && el > 7 {
+			d := ext[e+4:]
+			hostLen := int(d[3])<<8 | int(d[4])
+			if hostLen == len(alias) {
+				copy(d[5:], alias)
+			}
+			return
+		}
+		e += 4 + el
+	}
+}
+
+// TestPassthroughRewriteBreaksHandshake records why the plaintext rewrite was
+// dropped: with an equal-length alias the rewrite does reach the wire, yet the
+// handshake still cannot complete, because the client had already hashed the
+// original ClientHello into its transcript.
+func TestPassthroughRewriteBreaksHandshake(t *testing.T) {
+	const (
+		realHost = "pixiv.net" // 9 bytes
+		alias    = "fanbox.cc" // 9 bytes, same length so no padding is needed
+	)
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	seen := make(chan string, 1)
+	cert := originSelfSigned(realHost)
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		var got string
+		server := tls.Server(conn, &tls.Config{
+			Certificates: []tls.Certificate{cert},
+			GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+				got = hello.ServerName
+				return &cert, nil
+			},
+		})
+		_ = server.Handshake()
+		seen <- got
+		server.Close()
+	}()
+
+	raw, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := tls.Client(&patchConn{Conn: raw, alias: alias}, &tls.Config{
+		ServerName:         realHost,
+		InsecureSkipVerify: true,
+	})
+	err = client.Handshake()
+	if err == nil {
+		t.Fatal("a rewritten ClientHello must not complete a handshake")
+	}
+	t.Logf("passthrough rewrite failed as expected: %v", err)
+
+	select {
+	case got := <-seen:
+		if got != alias {
+			t.Fatalf("rewrite did not reach the wire: origin saw %q", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("origin never saw a ClientHello")
 	}
 }

@@ -57,7 +57,7 @@ func (c *appSideConn) SetWriteDeadline(time.Time) error { return nil }
 type mitmConn struct {
 	realConn net.Conn // already connected to the real IP
 	domain   string   // real destination name
-	alias    string   // benign SNI placed on the wire
+	plan     Plan     // SNI (or its absence) placed on the wire
 
 	inW  *io.PipeWriter // shuttle.Write -> appTLS (ciphertext from app)
 	outR *io.PipeReader // appTLS.Write -> shuttle.Read (ciphertext to app)
@@ -67,13 +67,13 @@ type mitmConn struct {
 	runDone   chan struct{}
 }
 
-func newMITMConn(real net.Conn, domain, alias string) *mitmConn {
+func newMITMConn(real net.Conn, domain string, plan Plan) *mitmConn {
 	rIn, wIn := io.Pipe()   // app ciphertext feeds appTLS
 	rOut, wOut := io.Pipe() // appTLS ciphertext reaches the app
 	m := &mitmConn{
 		realConn: real,
 		domain:   domain,
-		alias:    alias,
+		plan:     plan,
 		inW:      wIn,
 		outR:     rOut,
 		runDone:  make(chan struct{}),
@@ -113,11 +113,12 @@ func (m *mitmConn) run(rIn *io.PipeReader, wOut *io.PipeWriter) {
 		MinVersion: xutls.VersionTLS12,
 	}
 
-	// origin-facing client: benign alias SNI, real IP, skip origin cert (we
+	// origin-facing client: the fake SNI (empty means the extension is left
+	// off entirely, Cealing's null form), real IP, skip origin cert (we
 	// re-present a freshly signed leaf to the app, so origin validation here
 	// is intentionally relaxed — this is the MITM trust boundary).
 	clientCfg := &xutls.Config{
-		ServerName:         m.alias,
+		ServerName:         m.plan.SNI,
 		InsecureSkipVerify: true,
 	}
 

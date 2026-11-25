@@ -41,8 +41,6 @@ func TestMITMEndToEnd(t *testing.T) {
 	if err := AddCealingRule([]any{[]any{"origin.test"}, "benign.example", "127.0.0.1"}); err != nil {
 		t.Fatal(err)
 	}
-	SetMITM(true)
-	defer SetMITM(false)
 
 	const data = "pong-from-origin\n"
 

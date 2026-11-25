@@ -5,9 +5,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	C "github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/component/snifake"
 	"github.com/metacubex/mihomo/config"
+	C "github.com/metacubex/mihomo/constant"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -27,7 +27,6 @@ cealing-rules:
   - [["*.no-sni.test"], null, ""]
 sni-mimic:
   legacy.test: "ok.test"
-sni-mitm: true
 `))
 	require.NoError(t, err)
 
@@ -47,7 +46,6 @@ sni-mitm: true
 	assert.Equal(t, "ok.test", legacy.SNI)
 	assert.Empty(t, legacy.DialTo)
 
-	assert.True(t, snifake.MITMEnabled())
 }
 
 // TestCealingFilesWiring loads a rule document from disk, including the
