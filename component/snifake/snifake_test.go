@@ -132,3 +132,21 @@ func TestUnmatchedHostHasNoPlan(t *testing.T) {
 		t.Fatal("Enabled must be false with an empty table")
 	}
 }
+
+func TestBlockUDPFollowsRules(t *testing.T) {
+	ResetRules()
+	defer ResetRules()
+
+	if BlockUDP("a.quic.test") || BlockUDP("") {
+		t.Fatal("an empty table must not block anything")
+	}
+	if err := AddCealingRule([]any{[]any{"*quic.test"}, "g.cn", "1.2.3.4"}); err != nil {
+		t.Fatal(err)
+	}
+	if !BlockUDP("a.quic.test") {
+		t.Fatal("a matched host must be pushed onto TCP")
+	}
+	if BlockUDP("unrelated.test") || BlockUDP("") {
+		t.Fatal("only matched hosts are affected")
+	}
+}

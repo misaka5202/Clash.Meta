@@ -174,7 +174,18 @@ func TestBridgeWireSNI(t *testing.T) {
 			name: "generated random host",
 			rule: []any{[]any{"*pximg.net"}, "", "127.0.0.1"},
 			host: "i.pximg.net",
-			want: func(g string) bool { return g != "i.pximg.net" && strings.HasSuffix(g, ".com") },
+			want: func(g string) bool {
+				if g == "" || g == "i.pximg.net" {
+					return false
+				}
+				// the generated name must be one of the pools the signer uses
+				for _, tld := range []string{".com", ".net", ".org"} {
+					if strings.HasSuffix(g, tld) {
+						return true
+					}
+				}
+				return false
+			},
 		},
 		{
 			name: "server_name removed",

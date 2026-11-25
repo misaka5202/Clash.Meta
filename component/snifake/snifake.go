@@ -20,6 +20,7 @@
 package snifake
 
 import (
+	"errors"
 	"net"
 )
 
@@ -95,4 +96,20 @@ func ApplyDirect(c net.Conn, host string) net.Conn {
 		return c
 	}
 	return newMITMConn(c, host, plan)
+}
+
+// ErrRuleForcesTCP is returned for a UDP attempt to a host whose rule can only
+// be honoured over TCP.
+var ErrRuleForcesTCP = errors.New("snifake: rule serves this host through the TCP certificate bridge")
+
+// BlockUDP reports whether host is covered by a rule. QUIC and other UDP
+// carrying the real server_name would defeat the whole point, so the app is
+// pushed back onto TCP, where the bridge can fake it. Upstream achieves the
+// same effect by pointing such hosts at a local HTTPS-only listener.
+func BlockUDP(host string) bool {
+	if host == "" {
+		return false
+	}
+	_, ok := PlanFor(host)
+	return ok
 }

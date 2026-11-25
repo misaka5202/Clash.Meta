@@ -65,6 +65,13 @@ func (d *Direct) ListenPacketContext(ctx context.Context, metadata *C.Metadata) 
 	if err := d.loopBack.CheckPacketConn(metadata); err != nil {
 		return nil, err
 	}
+	host := metadata.Host
+	if host == "" {
+		host = metadata.SniffHost
+	}
+	if snifake.BlockUDP(host) {
+		return nil, snifake.ErrRuleForcesTCP
+	}
 	if err := d.ResolveUDP(ctx, metadata); err != nil {
 		return nil, err
 	}
