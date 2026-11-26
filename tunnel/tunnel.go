@@ -398,18 +398,20 @@ func resolveMetadata(metadata *C.Metadata) (proxy C.Proxy, rule C.Rule, err erro
 		helper.FindProcess = nil
 	}
 
-	// SNI mimic rules override the user's routing rules. A host covered by a
-	// rule must go through DIRECT outbound, where the TLS session is
-	// terminated by the certificate bridge and the wire SNI is rewritten.
-	// Sending it through a proxy adapter would leak the real server_name and
-	// leave the rule ineffective, so route it directly before rule matching.
+	// SNI mimic rules override the user's routing rules, except for rules with
+	// an empty SNI string (ModeRandom). Those are meant for browser-level
+	// spoofing: a random server_name breaks whole-app direct dials on most
+	// CDNs, so forcing DIRECT would make those sites unreachable. Every other
+	// rule (concrete alias or SNI removal) must go through DIRECT, where the
+	// certificate bridge rewrites the wire SNI; a proxy adapter would leak the
+	// real server_name and defeat the rule.
 	if snifake.Enabled() {
 		host := metadata.Host
 		if host == "" {
 			host = metadata.SniffHost
 		}
 		if host != "" {
-			if _, ok := snifake.PlanFor(host); ok {
+			if plan, ok := snifake.PlanFor(host); ok && plan.Mode != snifake.ModeRandom {
 				proxy = proxies["DIRECT"]
 				return
 			}
