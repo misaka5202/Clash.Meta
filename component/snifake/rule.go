@@ -158,6 +158,40 @@ func parsePattern(token string) (pattern, bool) {
 	return p, true
 }
 
+// googlePattern reports whether a Cealing domain token targets google.com so
+// its regional redirect siblings can be added automatically.
+func googlePattern(token string) bool {
+	s := strings.ToLower(strings.TrimSpace(token))
+	s = strings.TrimPrefix(s, "#")
+	s = strings.TrimPrefix(s, "$")
+	s = strings.TrimPrefix(s, "*")
+	// google.com or www.google.com (optionally with a leading dot)
+	s = strings.TrimPrefix(s, ".")
+	return s == "google.com" || strings.HasSuffix(s, ".google.com")
+}
+
+// regionalGoogleSuffixes are the ccTLD variants Google redirects mainland
+// visitors to. google.com -> google.com.hk / google.com.tw / google.com.hk
+// all carry the same content; covering them keeps the disguise intact after a
+// 302 so the browser does not fall off the MITM bridge.
+var regionalGoogleSuffixes = []string{
+	"google.com.hk",
+	"google.com.tw",
+	"google.co.jp",
+	"google.de",
+	"google.co.uk",
+}
+
+// googleRegionalPatterns builds wildcard patterns for Google's regional
+// domains. A leading '*' matches the domain itself and any subdomain.
+func googleRegionalPatterns() []pattern {
+	out := make([]pattern, 0, len(regionalGoogleSuffixes))
+	for _, d := range regionalGoogleSuffixes {
+		out = append(out, pattern{positive: "*." + d}, pattern{positive: d})
+	}
+	return out
+}
+
 // randomHost generates a fresh, syntactically valid host name. Every call
 // returns a different value, mirroring Cealing's "non-repeating string" rule.
 func randomHost() string {
@@ -227,6 +261,11 @@ func AddCealingRule(raw any) error {
 		return err
 	}
 	r := rule{alias: alias, mode: mode, dst: dst}
+	// Google redirects mainland visitors from google.com to google.com.hk
+	// (pref=hkredirect). If the redirect target is not covered by a rule it
+	// leaks the real SNI and fails to open. Extend every google pattern with
+	// the regional ccTLD siblings so the disguise follows the redirect.
+	var googleVariant bool
 	for _, d := range domains {
 		s, ok := d.(string)
 		if !ok {
@@ -234,7 +273,13 @@ func AddCealingRule(raw any) error {
 		}
 		if p, keep := parsePattern(s); keep {
 			r.patterns = append(r.patterns, p)
+			if googlePattern(s) {
+				googleVariant = true
+			}
 		}
+	}
+	if googleVariant {
+		r.patterns = append(r.patterns, googleRegionalPatterns()...)
 	}
 	if len(r.patterns) == 0 {
 		return nil // everything was commented out or browser-only
