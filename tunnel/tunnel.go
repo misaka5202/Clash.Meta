@@ -22,6 +22,7 @@ import (
 	"github.com/metacubex/mihomo/component/resolver"
 	"github.com/metacubex/mihomo/component/slowdown"
 	"github.com/metacubex/mihomo/component/sniffer"
+	"github.com/metacubex/mihomo/component/snifake"
 	C "github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/constant/features"
 	P "github.com/metacubex/mihomo/constant/provider"
@@ -395,6 +396,24 @@ func resolveMetadata(metadata *C.Metadata) (proxy C.Proxy, rule C.Rule, err erro
 		helper.FindProcess = nil
 	case process.FindProcessOff:
 		helper.FindProcess = nil
+	}
+
+	// SNI mimic rules override the user's routing rules. A host covered by a
+	// rule must go through DIRECT outbound, where the TLS session is
+	// terminated by the certificate bridge and the wire SNI is rewritten.
+	// Sending it through a proxy adapter would leak the real server_name and
+	// leave the rule ineffective, so route it directly before rule matching.
+	if snifake.Enabled() {
+		host := metadata.Host
+		if host == "" {
+			host = metadata.SniffHost
+		}
+		if host != "" {
+			if _, ok := snifake.PlanFor(host); ok {
+				proxy = proxies["DIRECT"]
+				return
+			}
+		}
 	}
 
 	switch mode {
