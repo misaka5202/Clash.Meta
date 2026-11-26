@@ -118,6 +118,13 @@ func (m *mitmConn) run(rIn *io.PipeReader, wOut *io.PipeWriter) {
 		return
 	}
 
+	// The application may propose an ALPN protocol list ("h2", "http/1.1").
+	// The bridge has to answer with one of them: an empty list makes Chrome
+	// abort with "http2_handshake_failed". The SAME list must be offered to
+	// the origin, otherwise the two ends could settle on different protocols
+	// and the HTTP/2 framing would desynchronise.
+	appALPN := m.readClientHelloALPN(peek)
+
 	// app-facing server: leaf cert for the REAL domain chains to our root, so
 	// a client that trusts the root validates without ignore-certificate-errors.
 	serverCfg := &xutls.Config{
@@ -126,6 +133,9 @@ func (m *mitmConn) run(rIn *io.PipeReader, wOut *io.PipeWriter) {
 			PrivateKey:  cert.LeafKey,
 		}},
 		MinVersion: xutls.VersionTLS12,
+	}
+	if len(appALPN) > 0 {
+		serverCfg.NextProtos = appALPN
 	}
 
 	// origin-facing client: the fake SNI (empty means the extension is left
@@ -136,9 +146,18 @@ func (m *mitmConn) run(rIn *io.PipeReader, wOut *io.PipeWriter) {
 		ServerName:         m.plan.SNI,
 		InsecureSkipVerify: true,
 	}
+	if len(appALPN) > 0 {
+		clientCfg.NextProtos = appALPN
+	}
 
 	appTLS := xutls.Server(&appSideConn{r: peek, w: wOut}, serverCfg)
 	upTLS := xutls.UClient(m.realConn, clientCfg, xutls.HelloChrome_Auto)
+	if len(appALPN) > 0 {
+		// utls ignores Config.NextProtos for a preset client: the ALPN list
+		// comes from the preset extension, so it has to be overwritten in the
+		// extension list itself before the ClientHello is marshalled.
+		upTLS.Extensions = overrideALPNExtension(upTLS.Extensions, appALPN)
+	}
 
 	// The origin handshake uses the already-connected TCP and is independent of
 	// the app; do it first, then complete the app handshake.
@@ -159,6 +178,50 @@ func (m *mitmConn) run(rIn *io.PipeReader, wOut *io.PipeWriter) {
 	}()
 	_, _ = io.Copy(appTLS, upTLS) // origin cleartext -> app
 	appTLS.Close()
+}
+
+// readClientHelloALPN peeks the application's ClientHello and extracts the
+// ALPN protocol list it proposes. The record is left in the reader, so the
+// TLS server still sees the original bytes.
+func (m *mitmConn) readClientHelloALPN(peek *bufio.Reader) []string {
+	raw, err := peek.Peek(5)
+	if err != nil || len(raw) < 5 {
+		return nil
+	}
+	recLen := int(raw[3])<<8 | int(raw[4])
+	// a ClientHello is small; cap the peek so a huge record cannot be buffered
+	const maxRecord = 16 * 1024
+	if recLen > maxRecord {
+		return nil
+	}
+	record, err := peek.Peek(5 + recLen)
+	if err != nil {
+		return nil
+	}
+	protos, err := parseClientHelloALPN(record)
+	if err != nil {
+		return nil
+	}
+	return protos
+}
+
+// overrideALPNExtension replaces the ALPN extension of a utls preset with the
+// protocol list the application proposed. utls takes the ALPN list from the
+// preset, so Config.NextProtos alone has no effect on the wire.
+func overrideALPNExtension(exts []xutls.TLSExtension, protos []string) []xutls.TLSExtension {
+	out := make([]xutls.TLSExtension, 0, len(exts))
+	replaced := false
+	for _, ext := range exts {
+		if alp, ok := ext.(*xutls.ALPNExtension); ok {
+			alp.AlpnProtocols = protos
+			replaced = true
+		}
+		out = append(out, ext)
+	}
+	if !replaced {
+		out = append(out, &xutls.ALPNExtension{AlpnProtocols: protos})
+	}
+	return out
 }
 
 // passthrough relays the connection in both directions without touching it.
